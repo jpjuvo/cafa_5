@@ -1,0 +1,11 @@
+tensorflow==2.12.*
+matplotlib
+pandas
+numpy
+seaborn
+tqdm
+optuna
+scikit-learn
+wandb
+scikit-multilearn
+fastaparser
