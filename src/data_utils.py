@@ -9,13 +9,15 @@ from torch.utils.data.sampler import RandomSampler, SequentialSampler
 class EmbeddingDataset(Dataset):
     def __init__(self, x, y, device='cpu'):
         self.x = x.to(device)
-        self.y = y.to(device)
+        self.y = y.to(device) if y is not None else None
         self.device = device
     
     def __len__(self):
-        return len(self.y)
+        return len(self.x)
 
     def __getitem__(self,idx):
+        if self.y is None:
+            return self.x[idx]
         return self.x[idx], self.y[idx]
     
 
@@ -110,3 +112,25 @@ def get_dataloaders(train_index, test_index, train_df, labels_df,
         )
     
     return dl, dl_val
+
+def get_test_dl(test_df, batch_size:int, num_workers:int=4, fast_dataloader=True):
+    # Generate the validation data for this split
+    X_test = torch.tensor(test_df.values.astype(np.float32))
+
+    if fast_dataloader:
+        dl_test = FastTensorDataLoader(X_test, batch_size=batch_size, shuffle=False)
+
+    else:
+        dataset_test = EmbeddingDataset(X_test, y=None, device='cpu')
+        
+        dl_test = DataLoader(
+            dataset_test,
+            sampler = SequentialSampler(dataset_test),
+            batch_size  = batch_size,
+            drop_last   = False,
+            num_workers = num_workers,
+            pin_memory  = True,
+            worker_init_fn = lambda id: np.random.seed(torch.initial_seed() // 2 ** 32 + id),
+        )
+    
+    return dl_test

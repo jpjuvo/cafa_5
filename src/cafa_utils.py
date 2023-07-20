@@ -10,11 +10,13 @@ from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_sco
 print('Reading data and preparing stuff...')
 train_terms = pd.read_csv("./input/cafa-5-protein-function-prediction/Train/train_terms.tsv",sep="\t")
 train_terms_updated = None # late init
-labels = None # late init
 term_aspect_map = train_terms.set_index('term')['aspect'].to_dict()
 train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
 train_embeddings = np.load('./input/t5embeds/train_embeds.npy')
+test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
+test_embeddings = np.load('./input/t5embeds/test_embeds.npy')
 train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
+test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
 
 if os.path.exists('./input/train_sequence_clusters.csv'):
     train_sequence_clusters_df = pd.read_csv('./input/train_sequence_clusters.csv')
@@ -36,6 +38,35 @@ eval_every_n = 1
 calculate_metric_every = 5
 
 
+def fold_ensemble_submission(out_dir):
+    n_folds = np.sum([1 for d in os.listdir(out_dir) if str(d).startswith('fold-')])
+    predictions = []
+    labels = []
+
+    for fold in range(n_folds):
+        test_fn = os.path.join(out_dir, f'fold-{fold}', f'test_preds.npy')
+        labels_fn = os.path.join(out_dir, f'fold-{fold}', f'labels_to_consider.txt')
+        if os.path.exists(test_fn):
+            predictions.append(np.load(test_fn))
+        if len(labels) == 0 and os.path.exists(labels_fn):
+            with open(labels_fn, "r") as f:
+                for line in f:
+                    labels.append(line.strip())
+
+
+    predictions = np.stack(predictions)
+    predictions = np.mean(predictions, axis=0)
+
+    df_submission = pd.DataFrame(columns = ['Protein Id', 'GO Term Id','Prediction'])
+    l = []
+    for k in list(test_protein_ids):
+        l += [ k] * predictions.shape[1]   
+
+    df_submission['Protein Id'] = l
+    df_submission['GO Term Id'] = labels * predictions.shape[0]
+    df_submission['Prediction'] = predictions.ravel()
+    df_submission.to_csv(os.path.join(out_dir, "submission.tsv"), header=False, index=False, sep="\t")
+
 
 def calculate_class_weights(dl, max_weight=20):
     """ Inverse frequency weights to labels clipped to max_weight """
@@ -56,7 +87,7 @@ def create_labels_df():
     # Loop through each label
     for i in tqdm(range(num_of_labels), total=num_of_labels):
         # For each label, fetch the corresponding train_terms data
-        n_train_terms = train_terms_updated[train_terms_updated['term'] ==  labels[i]]
+        n_train_terms = train_terms_updated[train_terms_updated['term'] ==  labels_to_consider[i]]
         
         # Fetch all the unique EntryId aka proteins related to the current label(GO term ID)
         label_related_proteins = n_train_terms['EntryID'].unique()
@@ -67,7 +98,7 @@ def create_labels_df():
         train_labels[:,i] =  series_train_protein_ids.isin(label_related_proteins).astype(float)
 
     # Convert train_Y numpy into pandas dataframe
-    return pd.DataFrame(data = train_labels, columns = labels)
+    return pd.DataFrame(data = train_labels, columns = labels_to_consider)
 
 
 def create_types_df():
@@ -151,13 +182,13 @@ def val_probs_to_ontology_columns(val_probs):
 
 
 def prepare_dataset():
-    global num_of_labels, labels_to_consider, labels_df, types_df, train_terms_updated, labels
+    global num_of_labels, labels_to_consider, labels_df, types_df, train_terms_updated
     num_of_labels = num_of_labels
 
     # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
-    labels = train_terms['term'].value_counts().index[:num_of_labels].tolist()
+    labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
     # Fetch the train_terms data for the relevant labels only
-    train_terms_updated = train_terms.loc[train_terms['term'].isin(labels)]
+    train_terms_updated = train_terms.loc[train_terms['term'].isin(labels_to_consider)]
 
     labels_df_fn = f'./output/t5_train_labels_num_lbl-{num_of_labels}.csv'
     if os.path.exists(labels_df_fn):

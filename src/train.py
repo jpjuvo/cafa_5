@@ -16,8 +16,7 @@ from models import get_model
 from cafa_utils import *
 from data_utils import *
 from metric import *
-from eval import calculate_metric
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+from eval import calculate_metric, evaluate_all_folds
 from binarymetrics import BinaryMetrics
 
 sys.path.append('.')
@@ -27,14 +26,14 @@ argParser = argparse.ArgumentParser()
 argParser.add_argument("-c", "--config", default="embedding_v1", help="config name without .py extension")
 argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
 argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
-argParser.add_argument("-m", "--metric_every", default=50, type=int, help="how often to evaluate metric between epochs")
+argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how often to evaluate metric between epochs")
 
 # constants
 N_SPLITS = 5
 RND_SEED = 2023
 
 
-def train_one_ep(fold_model, dl, optimizer, criterion, scaler, binarymetrics, logs, log_metrics=True):
+def train_one_ep(fold_model, dl, optimizer, criterion, scaler, binarymetrics, logs, device, log_metrics=True):
     """ Train for one epoch """
     fold_model.train()
     running_loss_trn = 0
@@ -64,7 +63,7 @@ def train_one_ep(fold_model, dl, optimizer, criterion, scaler, binarymetrics, lo
         binarymetrics.compute(logs=logs, prefix='train_')
 
 
-def evaluate(fold_model, dl_val, criterion, binarymetrics, logs):
+def evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device):
     """ Evaluate dl_val and calculate loss and metrics """
     fold_model.eval()
     loss_val  = 0
@@ -93,11 +92,34 @@ def evaluate(fold_model, dl_val, criterion, binarymetrics, logs):
     return np.concatenate(val_probs, 0), np.concatenate(val_trues, 0)
 
 
+def save_test_preds(fold_model, dl_test, fold_out_dir, device):
+    """ Save test set predictions to fold dir """
+    fold_model.eval()
+    test_probs = []
+
+    tk1 = tqdm(
+        dl_test, total=int(len(dl_test)), 
+        desc="predicting test set", ascii=True, leave=False, position=2)
+    for cpu_data in tk1:
+        data = cpu_data[0].to(device)
+        with torch.no_grad() and torch.cuda.amp.autocast():
+            logits = fold_model(data)
+            probs = F.sigmoid(logits).detach()
+            test_probs.append(probs.cpu().numpy())
+
+    test_probs = np.concatenate(test_probs, 0)
+    np.save(os.path.join(fold_out_dir, 'test_preds.npy'), test_probs)
+    with open(os.path.join(fold_out_dir, 'labels_to_consider.txt'), 'w') as fp:
+        for lbl in labels_to_consider:
+            fp.write("%s\n" % lbl)
+
+
 def main(config, device:str, eval_every:int, metric_every:int):
     CFG = get_config(config)
     out_dir = create_out_dir()
     group_id = out_dir.split('/')[-1]
     binarymetrics = BinaryMetrics(device=device)
+    dl_test = get_test_dl(test_df=test_df, batch_size=CFG['batch_size'])
 
     # Create a KFold object
     if train_sequence_clusters_df is None:
@@ -152,7 +174,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
             logs = {}
             
             train_one_ep(fold_model, dl, optimizer, 
-                         criterion, scaler, binarymetrics, logs,
+                         criterion, scaler, binarymetrics, logs, device,
                          log_metrics=(epoch % eval_every == 0) or epoch == CFG["epochs"])
             
             if scheduler is not None:
@@ -164,10 +186,10 @@ def main(config, device:str, eval_every:int, metric_every:int):
         
             #eval
             if (epoch % eval_every == 0) or epoch == CFG["epochs"]:
-                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs)
+                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device)
                 
                 # competition metric - slow
-                if (epoch % metric_every == 0) or epoch == CFG["epochs"]:
+                if (epoch % metric_every == 0):
                     calculate_metric(val_probs, vec_test_protein_ids, metric_gt, labels_to_consider, logs)
                     
                     # plot also prediction histogram at the same intervals # subsample equally
@@ -178,15 +200,16 @@ def main(config, device:str, eval_every:int, metric_every:int):
                             columns=[col])
                         wandb.log({
                             'pred_histogram' : wandb.plot.histogram(
-                                table[:,0],
+                                table,
                                 col,
                                 title=f"{col} Confidence Scores")})
                 
-                # Save out-of-fold predictions if this is the last epoch
+                # Save out-of-fold and test set predictions if this is the last epoch
                 if epoch == CFG["epochs"]:
                     np.save(os.path.join(fold_out_dir, f'oof_probs.npy'), val_probs)
                     np.save(os.path.join(fold_out_dir, f'oof_trues.npy'), val_trues)
                     np.save(os.path.join(fold_out_dir,f'oof_ids.npy'), vec_test_protein_ids)
+                    save_test_preds(fold_model, dl_test, fold_out_dir, device)
 
                 #release GPU memory cache
                 del val_probs, val_trues
@@ -207,6 +230,15 @@ def main(config, device:str, eval_every:int, metric_every:int):
             os.path.join(fold_out_dir, f'model.pth'))
         
         wandb.finish()
+
+    # create submission file
+    fold_ensemble_submission(out_dir)
+
+    # extremely slow
+    evaluate_all_folds(
+        out_dir=out_dir, 
+        train_terms=train_terms, 
+        labels_to_consider=labels_to_consider)
 
 
 if __name__ == "__main__":

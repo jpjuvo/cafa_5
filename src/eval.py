@@ -7,7 +7,6 @@ from tqdm.auto import tqdm
 
 from metric import ontologies, gt_parser, pred_parser, evaluate_prediction, tau_arr
 
-
 def evaluate_all_folds(out_dir, train_terms, labels_to_consider, CFG=None):
     """ Evaluates metric for output folder containing five fold dirs and oof probs """
     train_terms.to_csv(os.path.join(out_dir, f'terms.tsv'), sep='\t', index=False)

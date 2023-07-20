@@ -43,7 +43,7 @@ CFG = {
 }
 ```
 
-Running `train.py` creates timestamped run output folder under `./output/` with `fold-n` subfolders. Models and out-of-fold predictions are saved under each fold dir and metrics & losses are logged to Weights and Biases. Sample logs below:
+Running `train.py` creates timestamped run output folder under `./output/` with `fold-n` subfolders. Models, test predictions, and out-of-fold predictions are saved under each fold dir and metrics & losses are logged to Weights and Biases. The fold ensemble submission is saved under output folder. Sample W&B logs below:
 
 ![logs](./media/logs.png)
 
