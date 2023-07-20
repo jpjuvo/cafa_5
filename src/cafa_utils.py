@@ -8,18 +8,6 @@ from tqdm.auto import tqdm
 train_terms = pd.read_csv("./input/cafa-5-protein-function-prediction/Train/train_terms.tsv",sep="\t")
 term_aspect_map = train_terms.set_index('term')['aspect'].to_dict()
 
-# global vars late init
-train_terms_updated = None
-train_protein_ids = None
-train_embeddings = None
-test_protein_ids = None
-test_embeddings = None
-train_df, test_df = None, None
-num_of_labels = 1500
-labels_to_consider = None
-labels_df = None
-types_df = None
-
 if os.path.exists('./input/train_sequence_clusters.csv'):
     train_sequence_clusters_df = pd.read_csv('./input/train_sequence_clusters.csv')
 else:
@@ -27,7 +15,7 @@ else:
     train_sequence_clusters_df = None
 
 
-def fold_ensemble_submission(out_dir):
+def fold_ensemble_submission(out_dir, test_protein_ids):
     n_folds = np.sum([1 for d in os.listdir(out_dir) if str(d).startswith('fold-')])
     predictions = []
     labels = []
@@ -64,7 +52,7 @@ def calculate_class_weights(dl, max_weight=20):
             1., max_weight)
 
 
-def create_labels_df():
+def create_labels_df(train_protein_ids, train_terms_updated, num_of_labels, labels_to_consider):
     # Create an empty dataframe of required size for storing the labels,
     # i.e, train_size x num_of_labels (142246 x 1500)
     train_size = train_protein_ids.shape[0] # len(X)
@@ -88,43 +76,6 @@ def create_labels_df():
 
     # Convert train_Y numpy into pandas dataframe
     return pd.DataFrame(data = train_labels, columns = labels_to_consider)
-
-
-def create_types_df():
-    train_size = train_protein_ids.shape[0] # len(X)
-    train_types = np.zeros((train_size ,3))
-
-    # Convert from numpy to pandas series for better handling
-    series_train_protein_ids = pd.Series(train_protein_ids)
-
-    # Loop through each type
-    type_labels = ['BPO', 'CCO', 'MFO']
-    for i, t in enumerate(type_labels):
-        # For each label, fetch the corresponding train_terms data
-        n_train_terms = train_terms_updated[train_terms_updated['aspect'] ==  t]
-        
-        # Fetch all the unique EntryId aka proteins related to the current label(GO term ID)
-        type_related_proteins = n_train_terms['EntryID'].unique()
-        
-        # In the series_train_protein_ids pandas series, if a protein is related
-        # to the current label, then mark it as 1, else 0.
-        # Replace the ith column of train_Y with with that pandas series.
-        train_types[:,i] =  series_train_protein_ids.isin(type_related_proteins).astype(float)
-
-    # Convert train_Y numpy into pandas dataframe
-    types_df = pd.DataFrame(data = train_types, columns = type_labels)
-
-    # create maps for binary to column name
-    map_bpo = {0: '', 1: 'BPO'}
-    map_cco = {0: '', 1: 'CCO'}
-    map_mfo = {0: '', 1: 'MFO'}
-
-    # replace binary with column name and concatenate
-    types_df['combined'] = types_df['BPO'].map(map_bpo) + ',' + types_df['CCO'].map(map_cco) + ',' + types_df['MFO'].map(map_mfo)
-
-    # remove unnecessary leading, trailing, and multiple separators
-    types_df['combined'] = types_df['combined'].str.strip(',').str.replace(',+', ',', regex=True)
-    return types_df
 
 
 def create_out_dir(name=None, output_root='./output/'):
@@ -152,7 +103,7 @@ def create_out_dir(name=None, output_root='./output/'):
     return dirname
 
 
-def val_probs_to_ontology_columns(val_probs):
+def val_probs_to_ontology_columns(val_probs, labels_to_consider):
     """ 
     Maps classes to three different ontolygy columns 
     If input is n x 1500, the output is m x 3 where m > n
@@ -170,15 +121,9 @@ def val_probs_to_ontology_columns(val_probs):
     return np.concatenate([bpo_vals[:min_len,:], cco_vals[:min_len,:], mfo_vals[:min_len,:]], -1)
 
 
-def prepare_dataset(n_labels:int=1500, emb_type:str='t5'):
+def prepare_dataframes(n_labels:int=1500, emb_type:str='t5'):
     """ Preload datasets into memory """
     assert emb_type in ['t5', 'esm2_3b'], 'only t5 and esm2_3b emb_types are supported'
-
-    global num_of_labels, labels_to_consider, labels_df, types_df, train_terms_updated, \
-        train_protein_ids, test_protein_ids, train_df, test_df
-    
-    # set global variables
-    num_of_labels = n_labels
 
     if emb_type == 't5':
         train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
@@ -186,36 +131,31 @@ def prepare_dataset(n_labels:int=1500, emb_type:str='t5'):
         test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
         test_embeddings = np.load('./input/t5embeds/test_embeds.npy')
     elif emb_type == 'esm2_3b':
-        train_protein_ids = np.load('./input/_esm23b/train_ids_esm2_t36_3B_UR50D.npy')
-        train_embeddings = np.load('./input/_esm23b/train_embeds_esm2_t36_3B_UR50D.npy')
-        test_protein_ids = np.load('./input/_esm23b/test_ids_esm2_t36_3B_UR50D.npy')
-        test_embeddings = np.load('./input/_esm23b/test_embeds_esm2_t36_3B_UR50D.npy')
+        train_protein_ids = np.load('./input/esm23b/train_ids_esm2_t36_3B_UR50D.npy')
+        train_embeddings = np.load('./input/esm23b/train_embeds_esm2_t36_3B_UR50D.npy')
+        test_protein_ids = np.load('./input/esm23b/test_ids_esm2_t36_3B_UR50D.npy')
+        test_embeddings = np.load('./input/esm23b/test_embeds_esm2_t36_3B_UR50D.npy')
     
     train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
     test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
-    labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
+    labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
 
     print('Reading data and preparing stuff...')
     # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
-    labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
+    labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
     # Fetch the train_terms data for the relevant labels only
     train_terms_updated = train_terms.loc[train_terms['term'].isin(labels_to_consider)]
 
-    labels_df_fn = f'./output/t5_train_labels_num_lbl-{num_of_labels}.csv'
+    labels_df_fn = f'./output/t5_train_labels_num_lbl-{n_labels}.csv'
     if os.path.exists(labels_df_fn):
         labels_df = pd.read_csv(labels_df_fn)
     else:
-        labels_df = create_labels_df()
+        labels_df = create_labels_df(train_protein_ids, train_terms_updated, n_labels, labels_to_consider)
         labels_df.to_csv(labels_df_fn, index=False)
-    
-    types_df_fn = f'./output/train_types_in_num_lbl-{num_of_labels}.csv'
-    if os.path.exists(types_df_fn):
-        types_df = pd.read_csv(types_df_fn)
-    else:
-        types_df = create_types_df()
-        types_df.to_csv(types_df_fn, index=False)
 
     print('Preparations done')
+
+    return train_terms_updated, train_protein_ids, test_protein_ids, train_df, test_df, labels_to_consider, labels_df
 
 
 

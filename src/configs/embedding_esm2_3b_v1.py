@@ -4,7 +4,7 @@ CFG = {
     'emb_type' : 'esm2_3b',
     'batch_size' : 2048,
     'train_folds' : [0, 1, 2, 3, 4],
-    'input_shape' : 2048,
+    'input_shape' : 2560,
     'lr' : 0.001,
     'optimizer' : 'adam',
     'schedule' : 'cosine',

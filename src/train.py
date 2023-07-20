@@ -1,5 +1,6 @@
 import os
 import sys
+import gc
 import numpy as np
 import pandas as pd
 import wandb
@@ -23,7 +24,7 @@ sys.path.append('.')
 sys.path.append('src')
 
 argParser = argparse.ArgumentParser()
-argParser.add_argument("-c", "--config", default="embedding_v1", help="config name without .py extension")
+argParser.add_argument("-c", "--config", default="embedding_esm2_3b_v1", help="config name without .py extension")
 argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
 argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
 argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how often to evaluate metric between epochs")
@@ -31,6 +32,15 @@ argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how 
 # constants
 N_SPLITS = 5
 RND_SEED = 2023
+
+# global vars late init
+train_terms_updated = None
+train_protein_ids = None
+test_protein_ids = None
+train_df, test_df = None, None
+num_of_labels = 1500
+labels_to_consider = None
+labels_df = None
 
 
 def train_one_ep(fold_model, dl, optimizer, criterion, scaler, binarymetrics, logs, device, log_metrics=True):
@@ -115,9 +125,15 @@ def save_test_preds(fold_model, dl_test, fold_out_dir, device):
 
 
 def main(config, device:str, eval_every:int, metric_every:int):
+    global num_of_labels, train_terms_updated, train_protein_ids, test_protein_ids, \
+        train_df, test_df, labels_to_consider, labels_df
+
     CFG = get_config(config)
-    prepare_dataset(
-        n_labels=CFG["n_labels"] if 'n_labels' in CFG else 1500,
+    num_of_labels = CFG["n_labels"] if 'n_labels' in CFG else 1500
+
+    (train_terms_updated, train_protein_ids, test_protein_ids, 
+     train_df, test_df, labels_to_consider, labels_df) = prepare_dataframes(
+        n_labels=num_of_labels,
         emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5'
         )
     out_dir = create_out_dir()
@@ -197,7 +213,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
                     calculate_metric(val_probs, vec_test_protein_ids, metric_gt, labels_to_consider, logs)
                     
                     # plot also prediction histogram at the same intervals # subsample equally
-                    table_data = val_probs_to_ontology_columns(val_probs)[::5000]
+                    table_data = val_probs_to_ontology_columns(val_probs, labels_to_consider)[::5000]
                     for col_i, col in enumerate(['BPO', 'CCO', 'MFO']):
                         table = wandb.Table(
                             data=table_data[:,col_i:col_i+1], 
@@ -236,7 +252,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
         wandb.finish()
 
     # create submission file
-    fold_ensemble_submission(out_dir)
+    fold_ensemble_submission(out_dir, test_protein_ids)
 
     # extremely slow
     evaluate_all_folds(
