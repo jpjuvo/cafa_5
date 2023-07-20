@@ -1,0 +1,11 @@
+50ep, T5 emb, 5 folds, val f1 0.46
+https://github.com/jpjuvo/cafa_5/blob/main/src/configs/embedding_v1.py
+
+50ep, ESM2_3B, 5 folds, val f1 0.48 
+https://github.com/jpjuvo/cafa_5/blob/main/src/configs/embedding_esm2_3b_v1.py
+
+50ep, ESM2_3B, 5 folds, val f1 0.52, 500 labels
+https://github.com/jpjuvo/cafa_5/blob/main/src/configs/embedding_esm2_3b_v2.py
+
+15ep, ESM2_3B, 5 folds, val f1 0.47, 500 labels
+https://github.com/jpjuvo/cafa_5/blob/main/src/configs/embedding_esm2_3b_v3.py

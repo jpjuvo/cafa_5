@@ -10,3 +10,4 @@ wandb
 scikit-multilearn
 fastaparser
 torchmetrics
+optuna

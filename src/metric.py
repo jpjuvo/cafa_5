@@ -432,7 +432,7 @@ def compute_metrics(pred, gt, tau_arr, toi, toi_ia, ic_arr, n_cpu=0):
 
     g = gt.matrix[:, toi]
     n_gt = g.sum(axis=1)
-    if 0:
+    if 1:
         arg_lists = [[tau_arr, g, pred, toi, n_gt] for tau_arr in np.array_split(tau_arr, n_cpu)]
         with mp.Pool(processes=n_cpu) as pool:
             metrics = np.concatenate(pool.starmap(compute_metrics_, arg_lists), axis=0)
@@ -444,7 +444,7 @@ def compute_metrics(pred, gt, tau_arr, toi, toi_ia, ic_arr, n_cpu=0):
     if ic_arr is not None:
         g = gt.matrix[:, toi_ia]
         n_gt = (g * ic_arr[toi_ia]).sum(axis=1)
-        if 0:
+        if 1:
             arg_lists = [[tau_arr, g, pred, toi_ia, n_gt, ic_arr] for tau_arr in np.array_split(tau_arr, n_cpu)]
             with mp.Pool(processes=n_cpu) as pool:
                 metrics_ia = np.concatenate(pool.starmap(compute_metrics_w_, arg_lists), axis=0)

@@ -2,11 +2,12 @@ import torch
 import torch.nn as nn
 
 class Model(nn.Module):
-    def __init__(self, input_shape, num_of_labels, n_hidden:int=512, activation=nn.Mish()):
+    def __init__(self, input_shape, num_of_labels, n_hidden:int=512, dropout1_p:float=0.25,
+                use_norm:bool=True, activation=nn.Mish()):
         super(Model, self).__init__()
         
         self.batch_norm = nn.BatchNorm1d(input_shape)
-        self.dropout1 = nn.Dropout(p=0.25)
+        self.dropout1 = nn.Dropout(p=dropout1_p)
         
         self.dense1 = nn.Linear(input_shape, n_hidden)
         self.dense2 = nn.Linear(n_hidden, n_hidden)
@@ -16,10 +17,12 @@ class Model(nn.Module):
         
         self.out = nn.Linear(n_hidden, num_of_labels)
         self.activation = activation
+        self.use_norm = use_norm
 
     def forward(self, x):
         
-        x = self.batch_norm(x)
+        if self.use_norm:
+            x = self.batch_norm(x)
         x = self.dropout1(x)
         
         # n_feats 

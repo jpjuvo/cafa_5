@@ -3,7 +3,6 @@ import sys
 import gc
 import numpy as np
 import pandas as pd
-import wandb
 import json
 import argparse
 from tqdm.auto import tqdm
@@ -11,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.model_selection import StratifiedKFold, KFold
+import optuna
 
 from configs import get_config
 from models import get_model
@@ -22,12 +22,6 @@ from binarymetrics import BinaryMetrics
 
 sys.path.append('.')
 sys.path.append('src')
-
-argParser = argparse.ArgumentParser()
-argParser.add_argument("-c", "--config", default="embedding_esm2_3b_v3", help="config name without .py extension")
-argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
-argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
-argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how often to evaluate metric between epochs")
 
 # constants
 N_SPLITS = 5
@@ -102,73 +96,43 @@ def evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device):
     return np.concatenate(val_probs, 0), np.concatenate(val_trues, 0)
 
 
-def save_test_preds(fold_model, dl_test, fold_out_dir, device):
-    """ Save test set predictions to fold dir """
-    fold_model.eval()
-    test_probs = []
-
-    tk1 = tqdm(
-        dl_test, total=int(len(dl_test)), 
-        desc="predicting test set", ascii=True, leave=False, position=2)
-    for cpu_data in tk1:
-        data = cpu_data[0].to(device)
-        with torch.no_grad() and torch.cuda.amp.autocast():
-            logits = fold_model(data)
-            probs = F.sigmoid(logits).detach()
-            test_probs.append(probs.cpu().numpy())
-
-    test_probs = np.concatenate(test_probs, 0)
-    np.save(os.path.join(fold_out_dir, 'test_preds.npy'), test_probs)
-    with open(os.path.join(fold_out_dir, 'labels_to_consider.txt'), 'w') as fp:
-        for lbl in labels_to_consider:
-            fp.write("%s\n" % lbl)
-
-
-def main(config, device:str, eval_every:int, metric_every:int):
+def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='val_f1'):
     global num_of_labels, train_terms_updated, train_protein_ids, test_protein_ids, \
         train_df, test_df, labels_to_consider, labels_df
 
     CFG = get_config(config)
+    CFG.update(sweep_params)
     num_of_labels = CFG["n_labels"] if 'n_labels' in CFG else 1500
 
     (train_terms_updated, train_protein_ids, test_protein_ids, 
      train_df, test_df, labels_to_consider, labels_df) = prepare_dataframes(
         n_labels=num_of_labels,
-        emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5'
+        emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5',
+        verbose=0
         )
-    out_dir = create_out_dir()
-    group_id = out_dir.split('/')[-1]
     binarymetrics = BinaryMetrics(device=device)
-    dl_test = get_test_dl(test_df=test_df, batch_size=CFG['batch_size'])
 
     # Create a KFold object
     if train_sequence_clusters_df is None:
         skf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
-        tkfold = tqdm(enumerate(skf.split(train_df)), desc="Fold", leave=True, position=0)
+        tkfold = tqdm(enumerate(skf.split(train_df)), desc="Fold", leave=False, position=0)
     else:
         # include similar proteins in test sets
         skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
         tkfold = tqdm(enumerate(skf.split(train_df, train_sequence_clusters_df['cluster_id'].values)), desc="Fold", leave=True, position=0)
     
+    fold_metrics = []
+
     for fold, (train_index, test_index) in tkfold:
         if fold not in CFG['train_folds']: continue 
-        fold_out_dir = os.path.join(out_dir, f'fold-{fold}')
-        if not os.path.exists(fold_out_dir): os.mkdir(fold_out_dir)
 
         fold_cfg = {'fold':fold}
         fold_cfg.update(CFG)
-        wandb.init(project='cafa-5', group=group_id, dir=fold_out_dir, config=fold_cfg)
 
         dl, dl_val = get_dataloaders(
             train_index, test_index, 
             train_df, labels_df,
             batch_size=CFG['batch_size'])
-
-        # metric
-        fold_terms = train_terms_updated.loc[train_terms_updated.EntryID.isin(train_protein_ids[test_index])]
-        fold_terms.to_csv(os.path.join(fold_out_dir, f'terms.tsv'), sep='\t', index=False)
-        vec_test_protein_ids = fold_terms['EntryID'].values
-        metric_gt = gt_parser(os.path.join(fold_out_dir, f'terms.tsv'), ontologies)
 
         criterion = nn.BCEWithLogitsLoss().to(device)
         fold_model = get_model(
@@ -189,13 +153,13 @@ def main(config, device:str, eval_every:int, metric_every:int):
             optimizer, T_max=CFG["epochs"], eta_min=1e-6)
         scaler = torch.cuda.amp.GradScaler()
 
-        tkep = tqdm(range(1, CFG["epochs"] + 1), desc="epoch", leave=True, position=1)
+        tkep = tqdm(range(1, CFG["epochs"] + 1), desc="epoch", leave=False, position=1)
         for epoch in tkep:
             logs = {}
             
             train_one_ep(fold_model, dl, optimizer, 
                          criterion, scaler, binarymetrics, logs, device,
-                         log_metrics=(epoch % eval_every == 0) or epoch == CFG["epochs"])
+                         log_metrics=False)
             
             if scheduler is not None:
                 scheduler.step()
@@ -205,61 +169,34 @@ def main(config, device:str, eval_every:int, metric_every:int):
             gc.collect()
         
             #eval
-            if (epoch % eval_every == 0) or epoch == CFG["epochs"]:
-                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device)
-                
-                # competition metric - slow
-                if (epoch % metric_every == 0):
-                    calculate_metric(val_probs, vec_test_protein_ids, metric_gt, labels_to_consider, logs)
-                    
-                    # plot also prediction histogram at the same intervals # subsample equally
-                    table_data = val_probs_to_ontology_columns(val_probs, labels_to_consider)[::5000]
-                    for col_i, col in enumerate(['BPO', 'CCO', 'MFO']):
-                        table = wandb.Table(
-                            data=table_data[:,col_i:col_i+1], 
-                            columns=[col])
-                        wandb.log({
-                            'pred_histogram' : wandb.plot.histogram(
-                                table,
-                                col,
-                                title=f"{col} Confidence Scores")})
-                
-                # Save out-of-fold and test set predictions if this is the last epoch
-                if epoch == CFG["epochs"]:
-                    np.save(os.path.join(fold_out_dir, f'oof_probs.npy'), val_probs)
-                    np.save(os.path.join(fold_out_dir, f'oof_trues.npy'), val_trues)
-                    np.save(os.path.join(fold_out_dir,f'oof_ids.npy'), vec_test_protein_ids)
-                    save_test_preds(fold_model, dl_test, fold_out_dir, device)
+            val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device)
 
-                #release GPU memory cache
-                del val_probs, val_trues
-                torch.cuda.empty_cache()
-                gc.collect()
-                
-                tkep.set_postfix(
-                    train_loss=logs['train_loss'], train_f1=logs['train_f1'], 
-                    val_loss=logs['val_loss'],val_f1=logs['val_f1'])
-            else:
-                tkep.set_postfix(train_loss=logs['train_loss'])
+            #release GPU memory cache
+            del val_probs, val_trues
+            torch.cuda.empty_cache()
+            gc.collect()
 
-            wandb.log(logs, step=epoch)
-        
-        # Save final fold model
-        torch.save(
-            fold_model.state_dict(), 
-            os.path.join(fold_out_dir, f'model.pth'))
-        
-        wandb.finish()
+            if epoch == CFG['epochs']:
+                fold_metrics.append(logs[metric_to_monitor])
 
-    # create submission file
-    fold_ensemble_submission(out_dir, test_protein_ids)
+    return np.mean(fold_metrics)
 
-    # extremely slow
-    evaluate_all_folds(
-        out_dir=out_dir, 
-        train_terms=train_terms, 
-        labels_to_consider=labels_to_consider)
-
+def objective(trial):
+    config = 'embedding_esm2_3b_v1'
+    ep = trial.suggest_int('epochs', 5, 100)
+    n_hidden = trial.suggest_categorical('n_hidden', [512, 1024, 2048, 4096])
+    dropout1_p = trial.suggest_float('dropout1_p', 0, 0.8)
+    use_norm = trial.suggest_categorical('use_norm', [True, False])
+    
+    sweep_params = {'epochs' : ep, 'model_kwargs' : 
+                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p, 'use_norm':use_norm}}
+    metric = train_cv(config=config, sweep_params=sweep_params)
+    return metric
 
 if __name__ == "__main__":
-    main(**{n:v for n,v in vars(argParser.parse_args()).items()})
+
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=30, gc_after_trial=True)
+
+    print('')
+    print(study.best_params)

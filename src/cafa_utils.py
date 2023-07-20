@@ -121,7 +121,7 @@ def val_probs_to_ontology_columns(val_probs, labels_to_consider):
     return np.concatenate([bpo_vals[:min_len,:], cco_vals[:min_len,:], mfo_vals[:min_len,:]], -1)
 
 
-def prepare_dataframes(n_labels:int=1500, emb_type:str='t5'):
+def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', verbose=1):
     """ Preload datasets into memory """
     assert emb_type in ['t5', 'esm2_3b'], 'only t5 and esm2_3b emb_types are supported'
 
@@ -140,7 +140,7 @@ def prepare_dataframes(n_labels:int=1500, emb_type:str='t5'):
     test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
     labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
 
-    print('Reading data and preparing stuff...')
+    if verbose: print('Reading data and preparing stuff...')
     # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
     labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
     # Fetch the train_terms data for the relevant labels only
@@ -153,7 +153,7 @@ def prepare_dataframes(n_labels:int=1500, emb_type:str='t5'):
         labels_df = create_labels_df(train_protein_ids, train_terms_updated, n_labels, labels_to_consider)
         labels_df.to_csv(labels_df_fn, index=False)
 
-    print('Preparations done')
+    if verbose: print('Preparations done')
 
     return train_terms_updated, train_protein_ids, test_protein_ids, train_df, test_df, labels_to_consider, labels_df
 
