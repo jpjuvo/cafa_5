@@ -18,6 +18,7 @@ from data_utils import *
 from metric import *
 from eval import calculate_metric
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+from binarymetrics import BinaryMetrics
 
 sys.path.append('.')
 sys.path.append('src')
@@ -25,7 +26,7 @@ sys.path.append('src')
 argParser = argparse.ArgumentParser()
 argParser.add_argument("-c", "--config", default="embedding_v1", help="config name without .py extension")
 argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
-argParser.add_argument("-e", "--eval_every", default=2, type=int, help="how often to evaluate between epochs")
+argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
 argParser.add_argument("-m", "--metric_every", default=50, type=int, help="how often to evaluate metric between epochs")
 
 # constants
@@ -33,50 +34,38 @@ N_SPLITS = 5
 RND_SEED = 2023
 
 
-def train_one_ep(fold_model, dl, optimizer, criterion, scaler, logs):
+def train_one_ep(fold_model, dl, optimizer, criterion, scaler, binarymetrics, logs, log_metrics=True):
     """ Train for one epoch """
     fold_model.train()
     running_loss_trn = 0
-    train_probs = []
-    train_trues = []
         
     tk0 = tqdm(dl, total=int(len(dl)), leave=False, position=2)
-    for i,cpu_data in enumerate(tk0):
+    for cpu_data in tk0:
         data = (cpu_data[0].to(device), cpu_data[1].to(device))
         optimizer.zero_grad()
         
         with torch.cuda.amp.autocast():
-            y_true = data[1]
             logits = fold_model(data[0])
-            loss = criterion(logits, y_true)
+            loss = criterion(logits, data[1])
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
         # calculate score
-        probs = F.sigmoid(logits)
-        train_trues.append(y_true.cpu().numpy())
-        train_probs.append(probs.cpu().detach().numpy())
+        if log_metrics:
+            binarymetrics.accumulate_batch(F.sigmoid(logits).detach(), data[1])
 
         running_loss_trn += loss.item()
-        tk0.set_postfix(loss=(running_loss_trn / (i + 1)))
-        
-    train_probs = np.concatenate(train_probs, 0)
-    train_trues = np.concatenate(train_trues, 0)
-        
-    epoch_loss_trn = running_loss_trn / len(dl)
-    logs['train_loss'] = epoch_loss_trn
-    logs['train_auc'] = roc_auc_score(train_trues, train_probs)
     
-    int_trues = train_trues.astype(np.int32).ravel()
-    int_preds = (train_probs > 0.5).astype(np.int32).ravel()
-    logs['train_f1'] = f1_score(int_trues, int_preds)
-    logs['train_precision'] = precision_score(int_trues, int_preds)
-    logs['train_recall'] = recall_score(int_trues, int_preds)
+    logs['train_loss'] = running_loss_trn / len(dl)
+
+    if log_metrics:
+        binarymetrics.compute(logs=logs, prefix='train_')
 
 
-def evaluate(fold_model, dl_val, criterion, logs):
+def evaluate(fold_model, dl_val, criterion, binarymetrics, logs):
+    """ Evaluate dl_val and calculate loss and metrics """
     fold_model.eval()
     loss_val  = 0
     val_probs = []
@@ -90,34 +79,25 @@ def evaluate(fold_model, dl_val, criterion, logs):
         data = (cpu_data[0].to(device), cpu_data[1].to(device))
         with torch.no_grad() and torch.cuda.amp.autocast():
             logits = fold_model(data[0])
-            loss = criterion(logits, data[1])
-            probs = F.sigmoid(logits).detach().cpu().numpy()
-            y_true = data[1]
-            loss_val += loss.item()
-            val_trues.append(y_true.cpu().numpy())
-            val_probs.append(probs)
+            loss_val += criterion(logits, data[1]).item()
+            probs = F.sigmoid(logits).detach()
+
+            val_trues.append(cpu_data[1].numpy())
+            val_probs.append(probs.cpu().numpy())
+
+            binarymetrics.accumulate_batch(probs, data[1])
     
-    val_probs = np.concatenate(val_probs, 0)
-    val_trues = np.concatenate(val_trues, 0)
-    loss_val  /= len(dl_val)
+    logs['val_loss'] = loss_val / len(dl_val)
+    binarymetrics.compute(logs=logs, prefix='val_')
     
-    logs['val_loss'] = loss_val
-    logs['val_auc'] = roc_auc_score(val_trues, val_probs)
-    
-    int_trues = val_trues.astype(np.int32).ravel()
-    int_preds = (val_probs > 0.5).astype(np.int32).ravel()
-    logs['val_f1'] = f1_score(int_trues, int_preds)
-    logs['val_precision'] = precision_score(int_trues, int_preds)
-    logs['val_recall'] = recall_score(int_trues, int_preds)
-    
-    return val_probs, val_trues
+    return np.concatenate(val_probs, 0), np.concatenate(val_trues, 0)
 
 
 def main(config, device:str, eval_every:int, metric_every:int):
     CFG = get_config(config)
     out_dir = create_out_dir()
     group_id = out_dir.split('/')[-1]
-    
+    binarymetrics = BinaryMetrics(device=device)
 
     # Create a KFold object
     if train_sequence_clusters_df is None:
@@ -171,7 +151,9 @@ def main(config, device:str, eval_every:int, metric_every:int):
         for epoch in tkep:
             logs = {}
             
-            train_one_ep(fold_model, dl, optimizer, criterion, scaler, logs)
+            train_one_ep(fold_model, dl, optimizer, 
+                         criterion, scaler, binarymetrics, logs,
+                         log_metrics=(epoch % eval_every == 0) or epoch == CFG["epochs"])
             
             if scheduler is not None:
                 scheduler.step()
@@ -182,7 +164,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
         
             #eval
             if (epoch % eval_every == 0) or epoch == CFG["epochs"]:
-                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, logs)
+                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs)
                 
                 # competition metric - slow
                 if (epoch % metric_every == 0) or epoch == CFG["epochs"]:
@@ -192,7 +174,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
                     table_data = val_probs_to_ontology_columns(val_probs)[::5000]
                     for col_i, col in enumerate(['BPO', 'CCO', 'MFO']):
                         table = wandb.Table(
-                            data=table_data[:,col_i], 
+                            data=table_data[:,col_i:col_i+1], 
                             columns=[col])
                         wandb.log({
                             'pred_histogram' : wandb.plot.histogram(
@@ -215,7 +197,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
                     train_loss=logs['train_loss'], train_f1=logs['train_f1'], 
                     val_loss=logs['val_loss'],val_f1=logs['val_f1'])
             else:
-                tkep.set_postfix(train_loss=logs['train_loss'], train_f1=logs['train_f1'])
+                tkep.set_postfix(train_loss=logs['train_loss'])
 
             wandb.log(logs, step=epoch)
         

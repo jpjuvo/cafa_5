@@ -7,6 +7,7 @@ import gc
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 
 # load files
+print('Reading data and preparing stuff...')
 train_terms = pd.read_csv("./input/cafa-5-protein-function-prediction/Train/train_terms.tsv",sep="\t")
 train_terms_updated = None # late init
 labels = None # late init
@@ -33,6 +34,8 @@ RND_SEED = 2023
 device = 'cuda'
 eval_every_n = 1
 calculate_metric_every = 5
+
+
 
 def calculate_class_weights(dl, max_weight=20):
     """ Inverse frequency weights to labels clipped to max_weight """
@@ -172,4 +175,6 @@ def prepare_dataset():
 
 
 prepare_dataset()
+
+print('Preparations done')
 

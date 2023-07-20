@@ -34,6 +34,7 @@ Place these datasets into `input` folder according to the folder structure shown
 
 - [competition data](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/data) 
 - [T5 embeddings](https://www.kaggle.com/datasets/sergeifironov/t5embeds)
+- [ESM2 3B embeddings](https://www.kaggle.com/datasets/andreylalaley/4637427)
 
 
 ### Folder & file structure
@@ -43,7 +44,8 @@ root
 |  |_cafa-5-protein-function-prediction
 |  | |_...
 |  |_t5embeds
-|    |_...
+|  | |_...
+|  |_esm23b
 |_notebooks              (jupyter notebooks)
 |  |_...
 |_src                    (python files)
