@@ -116,6 +116,10 @@ def save_test_preds(fold_model, dl_test, fold_out_dir, device):
 
 def main(config, device:str, eval_every:int, metric_every:int):
     CFG = get_config(config)
+    prepare_dataset(
+        n_labels=CFG["n_labels"] if 'n_labels' in CFG else 1500,
+        emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5'
+        )
     out_dir = create_out_dir()
     group_id = out_dir.split('/')[-1]
     binarymetrics = BinaryMetrics(device=device)

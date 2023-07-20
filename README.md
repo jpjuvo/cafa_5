@@ -10,7 +10,7 @@ A solution codebase to the [CAFA5 Kaggle competition](https://www.kaggle.com/com
 
 Check [INSTALL.md](./INSTALL.md).
 
-## Train MLP with T5 embeddings
+## Train MLP with T5 or ESM2 embeddings
 
 This creates five CV fold models. The folds are split with protein sequence similarity clustering so that similar proteins end up in train and test splits. This is to mimic the competition train & test data where test proteins are very similar to train proteins. 
 
@@ -23,19 +23,21 @@ python src/train.py -c embedding_v1
 *Flags*
 - `-c`  or  `--config`,     default="embedding_v1" -    config name without .py extension
 - `-d`  or  `--device`,     default="cuda" -    cuda or cpu
-- `-e`  or  `--eval_every`,     default=2 - how often to evaluate between epochs
-- `-m`  or   `--metric_every`,  default=50 -    how often to evaluate competition metric between epochs
+- `-e`  or  `--eval_every`,     default=1 - how often to evaluate between epochs
+- `-m`  or   `--metric_every`,  default=100 -    how often to evaluate competition metric between epochs SLOW!
 
 Sample **embedding_v1 config.py** contents:
 ```
 CFG = {
-    'epochs' : 20,
+    'epochs' : 50,
+    'n_labels' : 1500,                      # how many labels to use in frequency order
+    'emb_type' : 't5',                      # embeddings to use - either 't5' or 'esm2_3b'
     'batch_size' : 2048,
     'train_folds' : [0, 1, 2, 3, 4],        # what folds out of 0-4 to train 
     'input_shape' : 1024,                   # T5 embedding shape
     'lr' : 0.001,
     'optimizer' : 'adam',                   # adam and adamw implemented
-    'schedule' : 'none',                    # if not 'none', Uses CosineAnnealing 
+    'schedule' : 'cosine',                  # 'cosine' (CosineAnnealing) or 'none' 
     'model_fn' : 'embeddingmodel_v1',       # model file name without .py in models dir
     'model_kwargs' : {                      # kwargs passed for model init
         'n_hidden' : 1024

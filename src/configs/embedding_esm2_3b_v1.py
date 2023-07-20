@@ -1,10 +1,10 @@
 CFG = {
     'epochs' : 50,
     'n_labels' : 1500,
-    'emb_type' : 't5',
+    'emb_type' : 'esm2_3b',
     'batch_size' : 2048,
     'train_folds' : [0, 1, 2, 3, 4],
-    'input_shape' : 1024,
+    'input_shape' : 2048,
     'lr' : 0.001,
     'optimizer' : 'adam',
     'schedule' : 'cosine',

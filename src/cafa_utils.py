@@ -3,39 +3,28 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from tqdm.auto import tqdm
-import gc
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 
 # load files
-print('Reading data and preparing stuff...')
 train_terms = pd.read_csv("./input/cafa-5-protein-function-prediction/Train/train_terms.tsv",sep="\t")
-train_terms_updated = None # late init
 term_aspect_map = train_terms.set_index('term')['aspect'].to_dict()
-train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
-train_embeddings = np.load('./input/t5embeds/train_embeds.npy')
-test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
-test_embeddings = np.load('./input/t5embeds/test_embeds.npy')
-train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
-test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
+
+# global vars late init
+train_terms_updated = None
+train_protein_ids = None
+train_embeddings = None
+test_protein_ids = None
+test_embeddings = None
+train_df, test_df = None, None
+num_of_labels = 1500
+labels_to_consider = None
+labels_df = None
+types_df = None
 
 if os.path.exists('./input/train_sequence_clusters.csv'):
     train_sequence_clusters_df = pd.read_csv('./input/train_sequence_clusters.csv')
 else:
     print('cannot find ./input/train_sequence_clusters.csv - continuing without it')
     train_sequence_clusters_df = None
-
-# Set the limit for label 
-num_of_labels = 1500
-labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
-labels_df = None
-types_df = None
-
-N_SPLITS = 5
-RND_SEED = 2023
-
-device = 'cuda'
-eval_every_n = 1
-calculate_metric_every = 5
 
 
 def fold_ensemble_submission(out_dir):
@@ -181,10 +170,32 @@ def val_probs_to_ontology_columns(val_probs):
     return np.concatenate([bpo_vals[:min_len,:], cco_vals[:min_len,:], mfo_vals[:min_len,:]], -1)
 
 
-def prepare_dataset():
-    global num_of_labels, labels_to_consider, labels_df, types_df, train_terms_updated
-    num_of_labels = num_of_labels
+def prepare_dataset(n_labels:int=1500, emb_type:str='t5'):
+    """ Preload datasets into memory """
+    assert emb_type in ['t5', 'esm2_3b'], 'only t5 and esm2_3b emb_types are supported'
 
+    global num_of_labels, labels_to_consider, labels_df, types_df, train_terms_updated, \
+        train_protein_ids, test_protein_ids, train_df, test_df
+    
+    # set global variables
+    num_of_labels = n_labels
+
+    if emb_type == 't5':
+        train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
+        train_embeddings = np.load('./input/t5embeds/train_embeds.npy')
+        test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
+        test_embeddings = np.load('./input/t5embeds/test_embeds.npy')
+    elif emb_type == 'esm2_3b':
+        train_protein_ids = np.load('./input/_esm23b/train_ids_esm2_t36_3B_UR50D.npy')
+        train_embeddings = np.load('./input/_esm23b/train_embeds_esm2_t36_3B_UR50D.npy')
+        test_protein_ids = np.load('./input/_esm23b/test_ids_esm2_t36_3B_UR50D.npy')
+        test_embeddings = np.load('./input/_esm23b/test_embeds_esm2_t36_3B_UR50D.npy')
+    
+    train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
+    test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
+    labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
+
+    print('Reading data and preparing stuff...')
     # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
     labels_to_consider = train_terms['term'].value_counts().index[:num_of_labels].tolist()
     # Fetch the train_terms data for the relevant labels only
@@ -204,8 +215,8 @@ def prepare_dataset():
         types_df = create_types_df()
         types_df.to_csv(types_df_fn, index=False)
 
+    print('Preparations done')
 
-prepare_dataset()
 
-print('Preparations done')
+
 
