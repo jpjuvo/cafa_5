@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.model_selection import StratifiedKFold, KFold
+from sklearn.model_selection import StratifiedKFold, KFold, GroupKFold
 import optuna
 
 from configs import get_config
@@ -117,9 +117,12 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
         skf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
         tkfold = tqdm(enumerate(skf.split(train_df)), desc="Fold", leave=False, position=0)
     else:
-        # include similar proteins in test sets
-        skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
-        tkfold = tqdm(enumerate(skf.split(train_df, train_sequence_clusters_df['cluster_id'].values)), desc="Fold", leave=True, position=0)
+        skf = GroupKFold(n_splits=N_SPLITS)
+        tkfold = tqdm(enumerate(skf.split(
+            X=train_df, 
+            y=None,
+            groups=train_sequence_clusters_df['cluster_id'].values
+            )), desc="Fold", leave=True, position=0)
     
     fold_metrics = []
 
@@ -183,13 +186,14 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
 
 def objective(trial):
     config = 'embedding_esm2_3b_v1'
-    ep = trial.suggest_int('epochs', 5, 100)
-    n_hidden = trial.suggest_categorical('n_hidden', [512, 1024, 2048, 4096])
-    dropout1_p = trial.suggest_float('dropout1_p', 0, 0.8)
-    use_norm = trial.suggest_categorical('use_norm', [True, False])
+    ep = trial.suggest_int('epochs', 5, 70)
+    lr = trial.suggest_float('lr', 0.0001, 0.01)
+    n_hidden = trial.suggest_categorical('n_hidden', [512, 1024, 1500])
+    dropout1_p = trial.suggest_float('dropout1_p', 0, 0.5)
+    use_residual = trial.suggest_categorical('use_residual', [True, False])
     
-    sweep_params = {'epochs' : ep, 'model_kwargs' : 
-                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p, 'use_norm':use_norm}}
+    sweep_params = {'epochs' : ep, 'lr' : lr, 'model_kwargs' : 
+                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p, 'use_residual': use_residual}}
     metric = train_cv(config=config, sweep_params=sweep_params)
     return metric
 

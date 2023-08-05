@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.model_selection import StratifiedKFold, KFold
+from sklearn.model_selection import StratifiedKFold, KFold, GroupKFold
 
 from configs import get_config
 from models import get_model
@@ -24,7 +24,7 @@ sys.path.append('.')
 sys.path.append('src')
 
 argParser = argparse.ArgumentParser()
-argParser.add_argument("-c", "--config", default="embedding_esm2_3b_v3", help="config name without .py extension")
+argParser.add_argument("-c", "--config", default="embedding_umap512_v1", help="config name without .py extension")
 argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
 argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
 argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how often to evaluate metric between epochs")
@@ -146,9 +146,12 @@ def main(config, device:str, eval_every:int, metric_every:int):
         skf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
         tkfold = tqdm(enumerate(skf.split(train_df)), desc="Fold", leave=True, position=0)
     else:
-        # include similar proteins in test sets
-        skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RND_SEED)
-        tkfold = tqdm(enumerate(skf.split(train_df, train_sequence_clusters_df['cluster_id'].values)), desc="Fold", leave=True, position=0)
+        skf = GroupKFold(n_splits=N_SPLITS)
+        tkfold = tqdm(enumerate(skf.split(
+            X=train_df, 
+            y=None,
+            groups=train_sequence_clusters_df['cluster_id'].values
+            )), desc="Fold", leave=True, position=0)
     
     for fold, (train_index, test_index) in tkfold:
         if fold not in CFG['train_folds']: continue 
