@@ -4,7 +4,9 @@ import pandas as pd
 import wandb
 import json
 from tqdm.auto import tqdm
+import subprocess
 
+from cafa_utils import train_terms
 from metric import ontologies, gt_parser, pred_parser, evaluate_prediction, tau_arr
 
 def evaluate_all_folds(out_dir, train_terms, labels_to_consider, CFG=None):
@@ -98,10 +100,66 @@ def calculate_metric(probs, vec_test_protein_ids, metric_gt, labels_to_consider,
     logs['ontology_avg'] = metric_mean
     
 
+def evaluate_out_dir(out_dir):
+    """ Evaluates metric for output folder containing five fold dirs and oof probs """
+    gt_file = os.path.join(out_dir, f'terms.tsv')
+    if not os.path.exists(gt_file):
+        train_terms.to_csv(gt_file, sep='\t', index=False)
+    
+    pred_dir = os.path.join(out_dir, 'oof_preds')
+    if not os.path.exists(pred_dir): os.mkdir(pred_dir)
+
+    res_dir = os.path.join(out_dir, 'metric')
+    if not os.path.exists(res_dir): os.mkdir(res_dir)
+
+    pred_fn = os.path.join(pred_dir, 'predictions.txt')
+    if not os.path.exists(pred_fn):
+
+        labels_to_consider = []
+        
+        n_folds = np.sum([1 for d in os.listdir(out_dir) if str(d).startswith('fold-')])
+        with open(pred_fn, 'w') as pred_f:
+            for fold in range(n_folds):
+                val_probs = np.load(os.path.join(out_dir, f'fold-{fold}', f'oof_probs.npy')).astype(np.float16)
+                labels_fn = os.path.join(out_dir, f'fold-{fold}', f'labels_to_consider.txt')
+                if len(labels_to_consider) == 0 and os.path.exists(labels_fn):
+                        with open(labels_fn, "r") as f:
+                            for line in f:
+                                labels_to_consider.append(line.strip())
+                
+                vec_test_protein_ids = np.load(os.path.join(out_dir, f'fold-{fold}',f'oof_ids.npy'),
+                                            allow_pickle=True).astype(str)
+                
+                indices = np.where(val_probs > 0.01)
+                
+                tk2 = tqdm(
+                    zip(*indices), total=len(indices[0]), 
+                    desc=f"collecting metric - fold-{fold}", leave=False, position=0)
+                
+                for i,j in tk2:
+                    pred_f.write(f'{vec_test_protein_ids[i]} {labels_to_consider[j]} {val_probs[i, j]}\n')
+        
+    print('Starting CAFA evaluator')
+    # python3 main.py go-basic.obo predition_dir/ test_terms.tsv -out_dir results/ -ia IA.txt -prop fill -norm cafa -th_step 0.001 -max_terms 500
+    PYTHON_PATH = subprocess.check_output("which python", shell=True).strip().decode('utf-8')
+    OBO_PATH = 'input/cafa-5-protein-function-prediction/Train/go-basic.obo'
+    IA_PATH = 'input/cafa-5-protein-function-prediction/IA.txt'
+    cmd = [PYTHON_PATH, 
+           "main.py", 
+           os.path.abspath(OBO_PATH), 
+           os.path.abspath(pred_dir),
+           os.path.abspath(gt_file),
+           '-out_dir', os.path.abspath(res_dir),
+           "-ia", os.path.abspath(IA_PATH),
+           '-prop', 'fill',
+           '-norm', 'cafa', 
+           '-th_step', '0.001', 
+           '-max_terms', '500'
+    ]
+    process = subprocess.Popen(cmd, cwd="CAFA-evaluator/src/")
+    _, _ = process.communicate() # this blocks until process completes
+
 if __name__ == "__main__":
-    pass
-    #from cafa_utils import train_terms, labels_to_consider
-    #evaluate_all_folds(
-    #    out_dir='./output/20230708-101820/', 
-    #    train_terms=train_terms, 
-    #    labels_to_consider=labels_to_consider)
+    #pass
+    evaluate_out_dir(
+        out_dir='./output/20230720-171629/')

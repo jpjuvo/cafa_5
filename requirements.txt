@@ -11,3 +11,4 @@ scikit-multilearn
 fastaparser
 torchmetrics
 optuna
+line_profiler
