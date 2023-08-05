@@ -42,6 +42,7 @@ def fold_ensemble_submission(out_dir, test_protein_ids):
     df_submission['Protein Id'] = l
     df_submission['GO Term Id'] = labels * predictions.shape[0]
     df_submission['Prediction'] = predictions.ravel()
+    df_submission['Prediction'] = df_submission['Prediction'].round(decimals=3)
     df_submission.to_csv(os.path.join(out_dir, "submission.tsv"), header=False, index=False, sep="\t")
 
 
@@ -76,6 +77,18 @@ def create_labels_df(train_protein_ids, train_terms_updated, num_of_labels, labe
 
     # Convert train_Y numpy into pandas dataframe
     return pd.DataFrame(data = train_labels, columns = labels_to_consider)
+
+
+def create_labels_df_optimized(train_protein_ids, train_terms_updated, num_of_labels, labels_to_consider):
+    # Create a DataFrame with EntryID as index and term as columns
+    df = train_terms_updated.pivot_table(index='EntryID', columns='term', aggfunc='size', fill_value=0)
+    df = df.loc[:, labels_to_consider].clip(upper=1)
+    
+    # Reindex the DataFrame with all possible train_protein_ids to include proteins with no labels
+    df = df.reindex(train_protein_ids, fill_value=0)
+
+    # Return the DataFrame with correct column names
+    return df
 
 
 def create_out_dir(name=None, output_root='./output/'):
@@ -121,9 +134,9 @@ def val_probs_to_ontology_columns(val_probs, labels_to_consider):
     return np.concatenate([bpo_vals[:min_len,:], cco_vals[:min_len,:], mfo_vals[:min_len,:]], -1)
 
 
-def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', verbose=1):
+def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', label_type:str='top_n', verbose=1):
     """ Preload datasets into memory """
-    assert emb_type in ['t5', 'esm2_3b'], 'only t5 and esm2_3b emb_types are supported'
+    assert emb_type in ['t5', 'esm2_3b', 'protbert', 'umap512'], 'only t5, esm2_3b, protbert and umap512 emb_types are supported'
 
     if emb_type == 't5':
         train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
@@ -135,24 +148,51 @@ def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', verbose=1):
         train_embeddings = np.load('./input/esm23b/train_embeds_esm2_t36_3B_UR50D.npy')
         test_protein_ids = np.load('./input/esm23b/test_ids_esm2_t36_3B_UR50D.npy')
         test_embeddings = np.load('./input/esm23b/test_embeds_esm2_t36_3B_UR50D.npy')
-    
+    elif emb_type == 'protbert':
+        train_protein_ids = np.load('./input/protbert/train_ids.npy')
+        train_embeddings = np.load('./input/protbert/train_embeddings.npy')
+        test_protein_ids = np.load('./input/protbert/test_ids.npy')
+        test_embeddings = np.load('./input/protbert/test_embeddings.npy')
+    elif emb_type == 'umap512':
+        assert os.path.exists('./input/train_emb_umap_512.npy'), 'run feature_reduction notebook before using umap512 embeddings'
+        train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
+        train_embeddings = np.load('./input/train_emb_umap_512.npy')
+        test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
+        test_embeddings = np.load('./input/test_emb_umap_512.npy')
+
     train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
     test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])
-    labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
+    
 
     if verbose: print('Reading data and preparing stuff...')
-    # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
-    labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
-    # Fetch the train_terms data for the relevant labels only
-    train_terms_updated = train_terms.loc[train_terms['term'].isin(labels_to_consider)]
 
-    labels_df_fn = f'./output/t5_train_labels_num_lbl-{n_labels}.csv'
-    if os.path.exists(labels_df_fn):
-        labels_df = pd.read_csv(labels_df_fn)
-    else:
-        labels_df = create_labels_df(train_protein_ids, train_terms_updated, n_labels, labels_to_consider)
-        labels_df.to_csv(labels_df_fn, index=False)
+    if label_type == 'top_n':
+        # Take value counts in descending order and fetch first 1500 `GO term ID` as labels
+        labels_to_consider = train_terms['term'].value_counts().index[:n_labels].tolist()
+        # Fetch the train_terms data for the relevant labels only
+        train_terms_updated = train_terms.loc[train_terms['term'].isin(labels_to_consider)]
 
+        labels_df_fn = f'./output/t5_train_labels_num_lbl-{n_labels}.csv'
+        if os.path.exists(labels_df_fn):
+            labels_df = pd.read_csv(labels_df_fn)
+        else:
+            labels_df = create_labels_df_optimized(train_protein_ids, train_terms_updated, n_labels, labels_to_consider)
+            labels_df.to_csv(labels_df_fn, index=False)
+    elif label_type == 'vae_embedding':
+        num_of_labels = 1000
+        labels_bpo = train_terms[train_terms['aspect'] == 'BPO']['term'].value_counts().index[:num_of_labels * 2].tolist()
+        labels_cco = train_terms[train_terms['aspect'] == 'CCO']['term'].value_counts().index[:num_of_labels].tolist()
+        labels_mfo = train_terms[train_terms['aspect'] == 'MFO']['term'].value_counts().index[:num_of_labels].tolist()
+        labels_all = labels_bpo + labels_cco + labels_mfo
+        labels_to_consider = labels_all
+        train_terms_updated = train_terms.loc[train_terms['term'].isin(labels_all)]
+        labels_df_fn = f'./output/vae_train_labels_num_lbl-{num_of_labels}.csv'
+        if os.path.exists(labels_df_fn):
+            labels_df = pd.read_csv(labels_df_fn)
+        else:
+            labels_df = create_labels_df_optimized(train_protein_ids, train_terms_updated, 0, labels_all)
+            labels_df.to_csv(labels_df_fn, index=False)
+        
     if verbose: print('Preparations done')
 
     return train_terms_updated, train_protein_ids, test_protein_ids, train_df, test_df, labels_to_consider, labels_df
