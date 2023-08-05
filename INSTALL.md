@@ -21,7 +21,16 @@ conda activate cafa5
 pip install --upgrade pip
 
 pip install -r requirements.txt
+conda install -c conda-forge umap-learn
 
+```
+
+## Competition metric
+
+The metric used in this competition is weighted F-score for three ontologies. [CAFA-evaluator](https://github.com/BioComputingUP/CAFA-evaluator) implements this metric so we can use it as a submodule. To install, run:
+
+```
+git submodule update --init --recursive --remote --merge
 ```
 
 ## Weights and Biases logging
@@ -35,6 +44,7 @@ Place these datasets into `input` folder according to the folder structure shown
 - [competition data](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/data) 
 - [T5 embeddings](https://www.kaggle.com/datasets/sergeifironov/t5embeds)
 - [ESM2 3B embeddings](https://www.kaggle.com/datasets/andreylalaley/4637427)
+- [ProtBERT embeddings](https://www.kaggle.com/datasets/henriupton/protbert-embeddings-for-cafa5)
 
 
 ### Folder & file structure
@@ -46,6 +56,9 @@ root
 |  |_t5embeds
 |  | |_...
 |  |_esm23b
+|  | |_...
+|  |_protbert
+|    |_...
 |_notebooks              (jupyter notebooks)
 |  |_...
 |_src                    (python files)

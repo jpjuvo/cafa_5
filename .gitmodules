@@ -1,0 +1,3 @@
+[submodule "CAFA-evaluator"]
+	path = CAFA-evaluator
+	url = git@github.com:BioComputingUP/CAFA-evaluator.git
