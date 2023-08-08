@@ -24,7 +24,7 @@ sys.path.append('.')
 sys.path.append('src')
 
 argParser = argparse.ArgumentParser()
-argParser.add_argument("-c", "--config", default="embedding_umap512_v1", help="config name without .py extension")
+argParser.add_argument("-c", "--config", default="embedding_all_sweep_v1", help="config name without .py extension")
 argParser.add_argument("-d", "--device", default="cuda", help="cuda or cpu")
 argParser.add_argument("-e", "--eval_every", default=1, type=int, help="how often to evaluate between epochs")
 argParser.add_argument("-m", "--metric_every", default=100, type=int, help="how often to evaluate metric between epochs")
@@ -134,8 +134,10 @@ def main(config, device:str, eval_every:int, metric_every:int):
     (train_terms_updated, train_protein_ids, test_protein_ids, 
      train_df, test_df, labels_to_consider, labels_df) = prepare_dataframes(
         n_labels=num_of_labels,
-        emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5'
+        emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5',
+        emb_dict=CFG["emb_dict"] if 'emb_dict' in CFG else {},
         )
+    input_shape = train_df.values.shape[1]
     out_dir = create_out_dir()
     group_id = out_dir.split('/')[-1]
     binarymetrics = BinaryMetrics(device=device)
@@ -176,7 +178,7 @@ def main(config, device:str, eval_every:int, metric_every:int):
         criterion = nn.BCEWithLogitsLoss().to(device)
         fold_model = get_model(
             model_fn=CFG["model_fn"], 
-            input_shape=CFG["input_shape"],
+            input_shape=input_shape,
             num_of_labels=num_of_labels,
             **CFG["model_kwargs"])
         fold_model.to(device)

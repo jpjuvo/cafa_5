@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from tqdm.auto import tqdm
+from sklearn.preprocessing import StandardScaler
 
 # load files
 train_terms = pd.read_csv("./input/cafa-5-protein-function-prediction/Train/train_terms.tsv",sep="\t")
@@ -134,31 +135,59 @@ def val_probs_to_ontology_columns(val_probs, labels_to_consider):
     return np.concatenate([bpo_vals[:min_len,:], cco_vals[:min_len,:], mfo_vals[:min_len,:]], -1)
 
 
-def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', label_type:str='top_n', verbose=1):
+def select_feature_subset(emb_dict:dict):
+    n_t5_features = int(round(emb_dict['emb_t5_p'] * 1024))
+    n_esm2_features = int(round(emb_dict['emb_esm2_p'] * 2560))
+    n_protbert_features = int(round(emb_dict['emb_protbert_p'] * 1024))
+    train_embeddings = np.concatenate([
+        np.load('./input/t5_train_embeds_ranked.npy')[:,:n_t5_features], # 1024
+        np.load('./input/esm2_train_embeds_ranked.npy')[:,:n_esm2_features], # 2560
+        np.load('./input/protbert_train_embeds_ranked.npy')[:,:n_protbert_features] # 1024
+    ], axis=1)
+    
+    test_embeddings = np.concatenate([
+        np.load('./input/t5_test_embeds_ranked.npy')[:,:n_t5_features],
+        np.load('./input/esm2_test_embeds_ranked.npy')[:,:n_esm2_features],
+        np.load('./input/protbert_test_embeds_ranked.npy')[:,:n_protbert_features]
+    ], axis=1)
+
+    # Initialize a scaler
+    scaler = StandardScaler()
+
+    # Fit on training set only
+    scaler.fit(train_embeddings)
+
+    # Apply transform to both the training set and the test set
+    train_embeddings = scaler.transform(train_embeddings)
+    test_embeddings = scaler.transform(test_embeddings)
+
+    return train_embeddings, test_embeddings
+
+
+def prepare_dataframes(n_labels:int=1500, emb_type:str='t5', label_type:str='top_n', emb_dict:dict={}, verbose=1):
     """ Preload datasets into memory """
-    assert emb_type in ['t5', 'esm2_3b', 'protbert', 'umap512'], 'only t5, esm2_3b, protbert and umap512 emb_types are supported'
+    assert emb_type in ['t5', 'esm2_3b', 'protbert', 'umap512', 'all'], 'only t5, esm2_3b, protbert, umap512 and all emb_types are supported'
+    
+    # these are identical in all embedding sets
+    train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
+    test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
 
     if emb_type == 't5':
-        train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
         train_embeddings = np.load('./input/t5embeds/train_embeds.npy')
-        test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
         test_embeddings = np.load('./input/t5embeds/test_embeds.npy')
     elif emb_type == 'esm2_3b':
-        train_protein_ids = np.load('./input/esm23b/train_ids_esm2_t36_3B_UR50D.npy')
         train_embeddings = np.load('./input/esm23b/train_embeds_esm2_t36_3B_UR50D.npy')
-        test_protein_ids = np.load('./input/esm23b/test_ids_esm2_t36_3B_UR50D.npy')
         test_embeddings = np.load('./input/esm23b/test_embeds_esm2_t36_3B_UR50D.npy')
     elif emb_type == 'protbert':
-        train_protein_ids = np.load('./input/protbert/train_ids.npy')
         train_embeddings = np.load('./input/protbert/train_embeddings.npy')
-        test_protein_ids = np.load('./input/protbert/test_ids.npy')
         test_embeddings = np.load('./input/protbert/test_embeddings.npy')
     elif emb_type == 'umap512':
         assert os.path.exists('./input/train_emb_umap_512.npy'), 'run feature_reduction notebook before using umap512 embeddings'
-        train_protein_ids = np.load('./input/t5embeds/train_ids.npy')
         train_embeddings = np.load('./input/train_emb_umap_512.npy')
-        test_protein_ids = np.load('./input/t5embeds/test_ids.npy')
         test_embeddings = np.load('./input/test_emb_umap_512.npy')
+    elif emb_type == 'all':
+        assert os.path.exists('./input/t5_train_embeds_ranked.npy'), 'run feature_ranking notebook before using all embeddings'
+        train_embeddings, test_embeddings = select_feature_subset(emb_dict)
 
     train_df = pd.DataFrame(train_embeddings, columns = ["Column_" + str(i) for i in range(1, train_embeddings.shape[1]+1)])
     test_df = pd.DataFrame(test_embeddings, columns = ["Column_" + str(i) for i in range(1, test_embeddings.shape[1]+1)])

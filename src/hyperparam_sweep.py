@@ -96,7 +96,7 @@ def evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device):
     return np.concatenate(val_probs, 0), np.concatenate(val_trues, 0)
 
 
-def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='val_f1'):
+def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='val_f1', skip_rest_th=0.3):
     global num_of_labels, train_terms_updated, train_protein_ids, test_protein_ids, \
         train_df, test_df, labels_to_consider, labels_df
 
@@ -108,8 +108,10 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
      train_df, test_df, labels_to_consider, labels_df) = prepare_dataframes(
         n_labels=num_of_labels,
         emb_type=CFG["emb_type"] if 'emb_type' in CFG else 't5',
+        emb_dict=CFG["emb_dict"] if 'emb_dict' in CFG else {},
         verbose=0
         )
+    input_shape = train_df.values.shape[1]
     binarymetrics = BinaryMetrics(device=device)
 
     # Create a KFold object
@@ -140,7 +142,7 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
         criterion = nn.BCEWithLogitsLoss().to(device)
         fold_model = get_model(
             model_fn=CFG["model_fn"], 
-            input_shape=CFG["input_shape"],
+            input_shape=input_shape,
             num_of_labels=num_of_labels,
             **CFG["model_kwargs"])
         fold_model.to(device)
@@ -170,37 +172,56 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
             #release GPU memory cache
             torch.cuda.empty_cache()
             gc.collect()
-        
-            #eval
-            val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device)
-
-            #release GPU memory cache
-            del val_probs, val_trues
-            torch.cuda.empty_cache()
-            gc.collect()
 
             if epoch == CFG['epochs']:
+                #eval only in the last epoch
+                val_probs, val_trues = evaluate(fold_model, dl_val, criterion, binarymetrics, logs, device)
+
+                #release GPU memory cache
+                del val_probs, val_trues
+                torch.cuda.empty_cache()
+                gc.collect()
+
                 fold_metrics.append(logs[metric_to_monitor])
+                # check if metric is below threshold and skip rest of the experiments
+                if np.mean(fold_metrics) < skip_rest_th:
+                    return np.mean(fold_metrics)
 
     return np.mean(fold_metrics)
 
 def objective(trial):
-    config = 'embedding_esm2_3b_v1'
-    ep = trial.suggest_int('epochs', 5, 70)
-    lr = trial.suggest_float('lr', 0.0001, 0.01)
-    n_hidden = trial.suggest_categorical('n_hidden', [512, 1024, 1500])
-    dropout1_p = trial.suggest_float('dropout1_p', 0, 0.5)
-    use_residual = trial.suggest_categorical('use_residual', [True, False])
+    config = 'embedding_all_sweep_v1'
+    ep = trial.suggest_int('epochs', 5, 80)
+    lr = trial.suggest_float('lr', 0.00005, 0.01)
+    n_hidden = trial.suggest_categorical('n_hidden', [1024, 1500, 2048])
+    dropout1_p = trial.suggest_float('dropout1_p', 0.1, 0.6)
     
     sweep_params = {'epochs' : ep, 'lr' : lr, 'model_kwargs' : 
-                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p, 'use_residual': use_residual}}
+                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p}}
+    metric = train_cv(config=config, sweep_params=sweep_params)
+    return metric
+
+def objective2(trial):
+    config = 'embedding_all_sweep_v1'
+    emb_t5_p = trial.suggest_float('emb_t5_p', 0.01, 1.0)
+    emb_esm2_p = trial.suggest_float('emb_esm2_p', 0.01, 1.0)
+    emb_protbert_p = trial.suggest_float('emb_protbert_p', 0.01, 1.0)
+    
+    sweep_params = {'emb_dict' : {
+        'emb_t5_p' : emb_t5_p, 
+        'emb_esm2_p' : emb_esm2_p,
+        'emb_protbert_p' : emb_protbert_p
+        }}
     metric = train_cv(config=config, sweep_params=sweep_params)
     return metric
 
 if __name__ == "__main__":
 
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=30, gc_after_trial=True)
+    study.optimize(objective, n_trials=60, gc_after_trial=True)
 
     print('')
+    print('Best params')
     print(study.best_params)
+    print('Best value')
+    print(study.best_value)
