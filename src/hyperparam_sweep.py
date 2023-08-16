@@ -185,19 +185,28 @@ def train_cv(config, sweep_params:dict, device:str='cuda', metric_to_monitor='va
                 fold_metrics.append(logs[metric_to_monitor])
                 # check if metric is below threshold and skip rest of the experiments
                 if np.mean(fold_metrics) < skip_rest_th:
-                    return np.mean(fold_metrics)
+                    return np.mean(fold_metrics) - 0.03 # typical high variance
 
-    return np.mean(fold_metrics)
+    # penalize variance
+    return np.mean(fold_metrics) - np.std(fold_metrics)
 
 def objective(trial):
     config = 'embedding_all_sweep_v1'
     ep = trial.suggest_int('epochs', 5, 80)
     lr = trial.suggest_float('lr', 0.00005, 0.01)
-    n_hidden = trial.suggest_categorical('n_hidden', [1024, 1500, 2048])
+    n_hidden = trial.suggest_categorical('n_hidden', [1500, 2048, 4092])
     dropout1_p = trial.suggest_float('dropout1_p', 0.1, 0.6)
+
+    emb_t5_p = trial.suggest_float('emb_t5_p', 0.2, 1.0)
+    emb_esm2_p = trial.suggest_float('emb_esm2_p', 0.2, 1.0)
     
     sweep_params = {'epochs' : ep, 'lr' : lr, 'model_kwargs' : 
-                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p}}
+                    {'n_hidden' : n_hidden, 'dropout1_p': dropout1_p}, 
+                    'emb_dict' : {
+                        'emb_t5_p' : emb_t5_p, 
+                        'emb_esm2_p' : emb_esm2_p,
+                        'emb_protbert_p' : 0
+                        }}
     metric = train_cv(config=config, sweep_params=sweep_params)
     return metric
 

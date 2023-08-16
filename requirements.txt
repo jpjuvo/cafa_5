@@ -12,3 +12,5 @@ fastaparser
 torchmetrics
 optuna
 line_profiler
+dgl
+polars
