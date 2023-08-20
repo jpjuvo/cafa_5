@@ -31,7 +31,12 @@ Sample **embedding_v1 config.py** contents:
 CFG = {
     'epochs' : 50,
     'n_labels' : 1500,                      # how many labels to use in frequency order
-    'emb_type' : 't5',                      # embeddings to use - either 't5' or 'esm2_3b'
+    'emb_type' : 't5',                      # embeddings to use - 't5', 'esm2_3b', 'protbert', 'all'
+    'emb_dict' : {                          # used only whe emb_type='all'
+        'emb_t5_p': 0.8,                    # what percentage of top ranked features to use
+        'emb_esm2_p': 0.3, 
+        'emb_protbert_p': 0
+    },
     'batch_size' : 2048,
     'train_folds' : [0, 1, 2, 3, 4],        # what folds out of 0-4 to train 
     'input_shape' : 1024,                   # T5 embedding shape
@@ -40,7 +45,10 @@ CFG = {
     'schedule' : 'cosine',                  # 'cosine' (CosineAnnealing) or 'none' 
     'model_fn' : 'embeddingmodel_v1',       # model file name without .py in models dir
     'model_kwargs' : {                      # kwargs passed for model init
-        'n_hidden' : 1024
+        'n_hidden' : 1024,
+        'dropout1_p': 0.2, 
+        'use_norm': True,
+        'use_residual': True
     }
 }
 ```
