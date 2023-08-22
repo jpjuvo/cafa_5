@@ -4,15 +4,15 @@
 
 Predict the biological function of a protein. 
 
-A solution codebase to the [CAFA5 Kaggle competition](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/overview).
+Team rähmä ai solution codebase to the [CAFA5 Kaggle competition](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/overview).
 
 ## Python environment & data setup
 
 Check [INSTALL.md](./INSTALL.md).
 
-## Train MLP with T5 or ESM2 embeddings
+## Train MLP with protein embeddings
 
-This creates five CV fold models. The folds are split with protein sequence similarity clustering so that similar proteins end up in train and test splits. This is to mimic the competition train & test data where test proteins are very similar to train proteins. 
+This creates five CV fold models. The folds are split with protein sequence similarity clustering so that similar proteins end up in same cross-validation folds. 
 
 To train with a config in `src/configs/embedding_v1.py`, run:
 
@@ -63,3 +63,17 @@ This takes a ~day to generate.
 See [DIAMOND docs](https://github.com/bbuchfink/diamond)
 
 Follow instructions in `notebooks/diamond/diamond.ipynb` and `notebooks/diamond/diamond_add_data_NetGo2.0.ipynb`.
+
+## Ensembling submissions
+
+See the [ensembling notebook](./notebooks/ensembling.ipynb).
+
+----------------------------
+
+## Methods tested
+
+- [Yijie Xu](https://www.kaggle.com/exjustice) explored [DeepGoZero](https://github.com/bio-ontology-research-group/deepgozero) inference with pretrained model [dgz inference script](./run_dgz_inference.sh)
+    - Unfortunately, we couldn't get this working in time.
+- [Yijie Xu](https://www.kaggle.com/exjustice) explored ThermoNet and generated 3D voxel representations for train and test proteins.
+- Hyperparameter sweep for model architecture and training paramas. [hyperparam_sweep.py](./src/hyperparam_sweep.py)
+- [Tomi](https://www.kaggle.com/tominiem) explored target target embeddings for reducing the number of 40k target classes. This was also tested in [target_compression notebook](./notebooks/target_compression.ipynb)
